@@ -56,44 +56,67 @@ lib/
 
 ## The Drift cross-package pattern (read this before touching `db/`)
 
-This package ships **plain Drift `Table` classes** (like `Themes`) but
-**never `@DriftAccessor`/`@DriftDatabase`-annotated classes**. This is a
-hard constraint, not a stylistic choice — here's why.
+**Drift `Table` classes cannot be shared cross-package with this
+toolchain — not even plain, unannotated ones.** This was the original
+design (see git history) and it was wrong; it shipped, was tested against a
+real `build_runner build` in a consuming app, and failed. Don't re-attempt
+it without re-reading this section.
 
-`drift_dev` (like `json_serializable`, `freezed`, and every other
-`build_runner`/`source_gen`-based generator) only ever generates code for
-annotations found in the *root package's own* `lib/` — the package that
-actually invokes `build_runner build`. A builder never reaches into an
-imported package's `lib/` to write a `.g.dart` file there. That's why:
+The failure: a plain `Table` subclass (e.g. `Themes`) declared here and
+imported into a consuming app's `@DriftDatabase(tables: [..., Themes])`
+list produces, when that app runs its own `build_runner build`:
 
-- A **plain `Table` subclass** (no annotation of its own, just getters) can
-  be imported into a consuming app's `@DriftDatabase(tables: [..., Themes])`
-  list, and it works perfectly — when `build_runner` runs *inside the
-  consuming app*, `drift_dev` resolves `Themes` via the Dart analyzer
-  regardless of which package physically declared the class, and emits the
-  corresponding `ThemeRow`/`ThemesCompanion` into the app's own
-  `database.g.dart`.
-- An **`@DriftAccessor`-annotated DAO** (e.g. a hypothetical `ThemeDao`)
-  needs a generated `part` file (`_$ThemeDaoMixin`) that only the
-  *consuming app's own* `build_runner` run can produce — and that mixin is
-  typed against the consuming app's own `@DriftDatabase` class, which this
-  package can never know about in advance. There is no way to ship a
-  DAO from here that "just works" when imported.
+```
+W drift_dev on lib/data/db/daos/theme_dao.dart: ...
+The referenced element, Themes, is not understood by drift.
+```
 
-**So**: this package ships the table + an abstract `ThemeRepository`
-interface (with its own plain, hand-written `ThemeRow`/`NewTheme` data
-classes — deliberately *not* named the same as Drift's generated row type
-to avoid confusion, though the names do collide; import with a prefix or
-`hide` in consuming code). Each consuming app writes its own small,
-concrete `@DriftAccessor` DAO exactly as it always would, then adds a thin
-adapter class implementing `ThemeRepository` by wrapping that DAO. The
-shared theme screens/providers in this package depend only on the abstract
-interface, never on any app's generated types.
+with **no** `ThemeRow`/`ThemesCompanion` emitted into the app's
+`database.g.dart`. The Dart analyzer resolves the import fine — this is a
+`drift_dev`-internal gap, not a language-level problem. Root cause,
+confirmed by reading `drift_dev`'s own `build.yaml` (not guessed): its main
+builder (`discover`/`analyzer`/`driftBuilder`) is declared with
+`auto_apply: dependents`, meaning its discovery/analysis phase only scans
+`.dart` files inside packages that **themselves** declare `drift_dev` as a
+(dev-)dependency. Since this package deliberately has no `drift_dev`
+dependency (see gotcha #1), nothing in `db/` is ever scanned by it, so a
+consuming app's `build_runner` run can never resolve a `Table` class
+declared here — regardless of import path, barrel vs. direct import, or
+`.dart_tool/build` cache state.
+
+**Tried and disproven**: adding `drift_dev` as a `dev_dependency` to this
+package, then re-resolving and rebuilding in the consuming app after
+clearing its `.dart_tool/build` cache. Same failure, unchanged. Do not
+re-try this fix — it doesn't address `auto_apply: dependents`, which scopes
+by the *consuming* package's own dependency graph, not by whether this
+package can run drift_dev on itself.
+
+**So, the actual working pattern**:
+
+- Table classes (like `db/themes_table.dart`'s `Themes`) live in this
+  package as **reference/template content only** — deliberately **not**
+  exported from `mercilith_app_template.dart`. Each consuming app copies
+  the class verbatim into its own `lib/data/db/tables/`, adds it to its own
+  `@DriftDatabase(tables: [...])` list, and keeps that copy in sync by hand
+  if the template changes.
+- What genuinely *does* share cross-package, because none of it goes
+  through `drift_dev` codegen: plain enums (`ThemeKind`), abstract
+  interfaces (`ThemeRepository`), and hand-written plain data classes
+  (`ThemeRow`, `NewTheme`) with no Drift annotations at all. These are
+  ordinary Dart types — the Dart analyzer (not drift_dev) resolves them,
+  so normal cross-package imports work exactly as expected.
+- Each consuming app writes its own small, concrete `@DriftAccessor` DAO
+  against its own local copy of the table, then adds a thin adapter class
+  implementing the shared `ThemeRepository` interface by wrapping that DAO.
+  The shared theme screens/providers in this package depend only on the
+  abstract interface, never on any app's generated types or table classes.
 
 **If you add another shared table in the future, follow this exact
-pattern** — plain table class + abstract repository interface + let each
-app supply its own DAO-backed adapter. Do not try to make a DAO itself
-shareable; it will not compile in the consuming app.
+pattern** — table class as a copy-paste template (not exported) + abstract
+repository interface (exported, genuinely shared) + let each app supply its
+own local table + DAO-backed adapter. Do not try to make a table class or a
+DAO itself importable; neither will resolve in the consuming app's
+`build_runner build`.
 
 ## Notification background-handler constraint
 
@@ -106,7 +129,7 @@ top-level wrapper function and passes it in.
 
 ## Toolchain gotchas (do not "fix" these without understanding why)
 
-1. **No `build_runner`/`drift_dev` dev-dependency in this package, deliberately.** This package has zero `@DriftAccessor`/`@DriftDatabase` classes (see the Drift cross-package pattern above) — if you ever find yourself wanting to add one here, stop and re-read that section first; it will not work the way you expect.
+1. **No `build_runner`/`drift_dev` dev-dependency in this package, deliberately.** This package has zero `@DriftAccessor`/`@DriftDatabase` classes, and adding `drift_dev` here would *not* make `db/themes_table.dart` resolve in a consuming app's own build anyway — that was tried and disproven, see the Drift cross-package pattern above. Don't add this dependency "to fix" a cross-package Drift issue; it doesn't.
 2. **`ThemeRow` name collision.** This package's `db/theme_repository.dart` defines a plain `ThemeRow` data class. Every consuming app's Drift setup also generates its *own* `ThemeRow` (from the `Themes` table, in that app's `database.g.dart`). These are different types with the same name. Consuming code that needs both must import one with a prefix or `hide` clause — don't rename either to "fix" this, the collision is inherent to the design (see the Drift pattern section).
 3. **No `sqlite3_flutter_libs` dependency here, deliberately.** This package only touches Drift's `Migrator`/`TableInfo`/`GeneratedColumn` abstractions and the `sqlite3.Database` type (a transitive dependency via `drift`) — it never opens a real database file. Bundling native sqlite3 binaries is an app-level concern (each app's own `sqlite3_flutter_libs` dependency); don't add it here "to be safe."
 4. **Windows notifications reuse one native string for both `NotificationResponse.actionId` and `.payload`.** Unlike Android, where the action id and the notification payload travel separately, `flutter_local_notifications`'s Windows implementation surfaces a single "invoked args" string as *both* fields — tapping an action button overwrites both with that button's `arguments` string. `NotificationService`'s Windows path works around this by embedding the action id inside the payload JSON itself (`kWindowsActionKey`); consuming code must unwrap that key before treating the rest of the payload as the real notification data. If you change the payload shape, keep this embedding intact or Windows action buttons will silently lose their payload.
