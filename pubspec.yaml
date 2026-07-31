@@ -1,0 +1,42 @@
+name: mercilith_app_template
+description: >
+  Shared Flutter infrastructure (theming, backup/restore, DB connection
+  hardening, generic widgets, notification mechanism) for Mercilith's apps.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Theme schema, Themes table definition, and ThemeRepository interface only
+  # — this package has no @DriftAccessor/@DriftDatabase classes of its own,
+  # so no drift_dev/build_runner dev-dependency is needed. See CLAUDE.md.
+  drift: ^2.28.2
+
+  # Backup file I/O, theme import/export.
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  file_picker: ^8.1.7
+  share_plus: ^10.1.4
+  media_store_plus: ^0.1.3
+
+  # Theme providers (activeThemeProvider/applyTheme pattern).
+  flutter_riverpod: ^2.6.1
+  collection: ^1.19.1
+
+  # Notification mechanism (Android + Windows scheduling, action buttons).
+  flutter_local_notifications: ^19.4.2
+  timezone: ^0.10.1
+  flutter_timezone: ^4.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
