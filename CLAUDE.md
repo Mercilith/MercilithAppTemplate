@@ -52,7 +52,46 @@ lib/
     notification_service.dart  # parameterized Android/Windows notification wrapper
     fire_times.dart             # pure fire-time computation
     notification_repeat_mode.dart
+  sync/
+    sync_key.dart               # SyncKey — pairing key: topic + AES secret + permission bits
+    sync_permission.dart        # SyncPermission bitflags (sync/communicate/control)
+    sync_crypto.dart            # AES-256-GCM encrypt/decrypt of sync payloads
+    sync_envelope.dart          # SyncEnvelope (row replication) / SyncCommand (control) wire types
+    mqtt_sync_transport.dart    # MqttSyncTransport — connect/reconnect/pub/sub, raw bytes only
+    base32_crockford.dart       # internal codec for SyncKey's text encoding, not exported
 ```
+
+## Cross-device sync transport (`sync/`)
+
+Generic building blocks for pairing two (or more) devices over a public
+MQTT broker with no server and no accounts — one device generates a
+[`SyncKey`], the encoded key string is copied to another device, and from
+then on both publish/subscribe on the topic that key derives, encrypting
+everything with the key's secret. This package intentionally stops at
+*transport* — connecting, encrypting, framing messages — and knows nothing
+about what a consuming app actually replicates. TaskApp's `lib/features/
+sync/` (not in this package — see the Drift cross-package pattern below
+for why the actual DB-touching engine can't live here) is the reference
+consumer: it defines its own `entityType` strings, its own DAO-level
+upsert-by-id logic, and its own `SyncConnections` table for persisting
+paired keys.
+
+**The broker (HiveMQ's public instance, `broker.hivemq.com`, the default
+host) has zero authentication or access control** — anyone can publish or
+subscribe to any topic. All of this design's actual security comes from
+the app layer: [`SyncKey.topic`] is unguessable (128 random bits) and
+[`SyncCrypto`] (AES-256-GCM) is applied to every payload before
+[`MqttSyncTransport.publish`] ever sees it. Never publish plaintext through
+`MqttSyncTransport` — it deliberately has no encryption of its own, by
+design, so that responsibility can't be silently skipped by a future
+change to this file alone.
+
+`SyncPermission` is a set of bitflags (`sync`, `communicate`, `control`)
+packed into one byte of the key, not a single enum value — a key can carry
+any subset. This package only defines the flags; what each tier actually
+authorizes is entirely up to the consuming app (TaskApp gates real DB
+writes with `sync` and delegates to its existing Automation executor for
+`control` — see TaskApp's own CLAUDE.md/feature map, not this repo).
 
 ## The Drift cross-package pattern (read this before touching `db/`)
 

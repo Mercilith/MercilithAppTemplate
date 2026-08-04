@@ -34,3 +34,12 @@ export 'navigation/adaptive_nav_scaffold.dart';
 export 'notifications/fire_times.dart';
 export 'notifications/notification_repeat_mode.dart';
 export 'notifications/notification_service.dart';
+
+// Sync (cross-device, via HiveMQ or any MQTT broker)
+export 'sync/mqtt_sync_transport.dart';
+export 'sync/sync_crypto.dart';
+export 'sync/sync_envelope.dart';
+export 'sync/sync_key.dart';
+export 'sync/sync_permission.dart';
+// `sync/base32_crockford.dart` is deliberately NOT exported — internal
+// codec detail of `SyncKey`'s text encoding, not a public API surface.
