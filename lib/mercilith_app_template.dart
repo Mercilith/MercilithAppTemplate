@@ -39,6 +39,7 @@ export 'notifications/notification_service.dart';
 export 'sync/mqtt_sync_transport.dart';
 export 'sync/sync_crypto.dart';
 export 'sync/sync_envelope.dart';
+export 'sync/sync_id.dart';
 export 'sync/sync_key.dart';
 export 'sync/sync_permission.dart';
 // `sync/base32_crockford.dart` is deliberately NOT exported — internal
