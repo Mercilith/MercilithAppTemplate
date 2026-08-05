@@ -33,6 +33,13 @@ dependencies:
   timezone: ^0.10.1
   flutter_timezone: ^4.1.1
 
+  # Cross-device sync transport: pure-Dart MQTT client (no platform
+  # channels, works identically on Android/Windows) and pure-Dart AEAD
+  # encryption (no native code needed on Windows desktop). See CLAUDE.md,
+  # "Cross-device sync transport."
+  mqtt_client: ^10.11.0
+  cryptography: ^2.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
