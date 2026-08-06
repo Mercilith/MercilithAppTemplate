@@ -81,10 +81,39 @@ host) has zero authentication or access control** — anyone can publish or
 subscribe to any topic. All of this design's actual security comes from
 the app layer: [`SyncKey.topic`] is unguessable (128 random bits) and
 [`SyncCrypto`] (AES-256-GCM) is applied to every payload before
-[`MqttSyncTransport.publish`] ever sees it. Never publish plaintext through
-`MqttSyncTransport` — it deliberately has no encryption of its own, by
-design, so that responsibility can't be silently skipped by a future
-change to this file alone.
+[`MqttSyncTransport.publishRetained`]/`publishEphemeral` ever sees it.
+Never publish plaintext through `MqttSyncTransport` — it deliberately has
+no encryption of its own, by design, so that responsibility can't be
+silently skipped by a future change to this file alone.
+
+**A plain MQTT broker keeps no message history — a client that's offline
+when something is published never sees it, even after reconnecting.**
+`MqttSyncTransport` works around this by publishing every row *retained*,
+one per row on its own subtopic (`<topic>/<entityType>/<syncId>`), and
+subscribing to the whole tree at once (`<topic>/#`). A retained message is
+the one piece of state an MQTT broker does keep — the last message
+published to an exact topic, replayed immediately to any client that
+(re)subscribes to it, whether or not they were online for the original
+publish. This turns the broker into a small, self-pruning key-value store
+of "current state per row," so pairing a connection for the first time (or
+reconnecting after any amount of downtime) always replays everything, not
+just live traffic from that point on. Row deletion is represented as an
+empty-payload retained publish (`clearRetained`) — MQTT's own way of
+saying "nothing retained here anymore," which the broker both stores (as
+"deleted") and delivers live to anyone currently subscribed. This was a
+real bug in the first version of this transport (plain, non-retained
+publishes) — a device paired while the other was offline would never
+receive anything it missed; see git history on `mqtt_sync_transport.dart`
+if you need the before/after.
+
+**Consequence worth flagging to end users**: the broker now holds a
+standing copy of the ciphertext for every row ever published on a
+connection, until that row is deleted — not just transient in-flight
+traffic. Still just ciphertext, still gated behind the unguessable topic,
+but a meaningfully different storage footprint than "nothing is ever
+stored." Describe the feature to users as "no account, encrypted data
+briefly-to-indefinitely cached on a public broker," not "no server storage
+at all."
 
 `SyncPermission` is a set of bitflags (`sync`, `communicate`, `control`)
 packed into one byte of the key, not a single enum value — a key can carry
