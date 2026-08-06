@@ -7,7 +7,7 @@ import 'package:mercilith_app_template/mercilith_app_template.dart';
 void main() {
   group('SyncCrypto', () {
     test('encrypt/decrypt round-trips plaintext', () async {
-      final key = SyncKey.generate(permissions: {SyncPermission.sync});
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
       final crypto = SyncCrypto(key.secret);
       final plaintext = Uint8List.fromList(utf8.encode('hello sync'));
 
@@ -18,7 +18,7 @@ void main() {
     });
 
     test('two encryptions of the same plaintext produce different bytes', () async {
-      final key = SyncKey.generate(permissions: {SyncPermission.sync});
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
       final crypto = SyncCrypto(key.secret);
       final plaintext = Uint8List.fromList(utf8.encode('same message'));
 
@@ -29,8 +29,8 @@ void main() {
     });
 
     test('decrypting with the wrong key fails', () async {
-      final keyA = SyncKey.generate(permissions: {SyncPermission.sync});
-      final keyB = SyncKey.generate(permissions: {SyncPermission.sync});
+      final keyA = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      final keyB = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
       final wire = await SyncCrypto(
         keyA.secret,
       ).encrypt(Uint8List.fromList(utf8.encode('secret')));
@@ -39,7 +39,7 @@ void main() {
     });
 
     test('decrypting a tampered message fails', () async {
-      final key = SyncKey.generate(permissions: {SyncPermission.sync});
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
       final crypto = SyncCrypto(key.secret);
       final wire = await crypto.encrypt(
         Uint8List.fromList(utf8.encode('do not modify me')),
@@ -50,7 +50,7 @@ void main() {
     });
 
     test('decrypting too-short input throws a FormatException', () async {
-      final key = SyncKey.generate(permissions: {SyncPermission.sync});
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
       final crypto = SyncCrypto(key.secret);
       expect(
         () => crypto.decrypt(Uint8List.fromList([1, 2, 3])),

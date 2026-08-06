@@ -53,11 +53,13 @@ lib/
     fire_times.dart             # pure fire-time computation
     notification_repeat_mode.dart
   sync/
-    sync_key.dart               # SyncKey — pairing key: topic + AES secret + permission bits
+    sync_key.dart               # SyncKey — rotating-topic derivation + AES secret + signing pubkey + permission bits
     sync_permission.dart        # SyncPermission bitflags (sync/communicate/control)
     sync_crypto.dart            # AES-256-GCM encrypt/decrypt of sync payloads
+    sync_signature.dart         # SyncSigner/SyncVerifier — Ed25519 sign/verify
+    signed_message.dart         # SignedMessage — wire framing: optional signature + ciphertext
     sync_envelope.dart          # SyncEnvelope (row replication) / SyncCommand (control) wire types
-    mqtt_sync_transport.dart    # MqttSyncTransport — connect/reconnect/pub/sub, raw bytes only
+    mqtt_sync_transport.dart    # MqttSyncTransport — connect + multi-topic subscribe/publish, raw bytes only
     base32_crockford.dart       # internal codec for SyncKey's text encoding, not exported
 ```
 
@@ -79,48 +81,82 @@ paired keys.
 **The broker (HiveMQ's public instance, `broker.hivemq.com`, the default
 host) has zero authentication or access control** — anyone can publish or
 subscribe to any topic. All of this design's actual security comes from
-the app layer: [`SyncKey.topic`] is unguessable (128 random bits) and
-[`SyncCrypto`] (AES-256-GCM) is applied to every payload before
-[`MqttSyncTransport.publishRetained`]/`publishEphemeral` ever sees it.
-Never publish plaintext through `MqttSyncTransport` — it deliberately has
-no encryption of its own, by design, so that responsibility can't be
-silently skipped by a future change to this file alone.
+the app layer: the topic itself is unguessable without the key (see the
+rotation note below) and [`SyncCrypto`] (AES-256-GCM) is applied to every
+payload before [`MqttSyncTransport.publishRetained`]/`publishEphemeral`
+ever sees it. Never publish plaintext through `MqttSyncTransport` — it
+deliberately has no encryption of its own, by design, so that
+responsibility can't be silently skipped by a future change to this file
+alone.
+
+**The topic rotates every 30 seconds** (`SyncKey.slotDuration`),
+deterministically derived from `sha256(topicSeed ++ slot)` where `slot` is
+`SyncKey.slotFor(now)` — UTC-epoch time truncated to 30-second buckets, so
+every device computes the same slot from its own clock with no
+coordination and no timezone dependence. This is a traffic-analysis
+mitigation on top of encryption: a single fixed topic for a connection's
+entire lifetime is a stable, observable "channel" on a public broker even
+if its contents are opaque; hashing in the current slot means an outside
+observer can't trivially tell that two bursts of traffic minutes apart
+belong to the same ongoing pairing, even though anyone holding
+`topicSeed` can always compute the current (or any past/future) topic
+directly. `MqttSyncTransport` itself is topic-agnostic — it's the caller's
+job to call `subscribeToTopic`/`unsubscribeFromTopic` to maintain a
+rotating window (TaskApp's `SyncService` keeps prev/current/next
+subscribed at once, to tolerate minor clock skew between devices) and to
+resolve `SyncKey.currentTopic()` before every publish.
+
+**Every message carries an optional Ed25519 signature** (`SyncSigner`/
+`SyncVerifier`, framed by `SignedMessage`), because AES-GCM alone can't
+answer "which of the several devices holding this shared secret sent
+this?" — only that it was encrypted with the secret at all. Only the
+device that called `SyncKey.generate` ever holds the private signing key
+(`GeneratedSyncKey.signingPrivateKeySeed`, deliberately never part of the
+encoded string); every paired device can verify a signature against the
+embedded `SyncKey.signingPublicKey`, but only the creator can produce one.
+This package doesn't decide when a signature is *required* — that's a
+consuming-app policy (TaskApp requires a valid signature for `control`-
+tier messages specifically, so a remote device can't trigger real actions
+just because it holds the shared secret; regular data sync stays
+unrestricted, since bidirectional sync from any paired device is the
+point of that tier).
 
 **A plain MQTT broker keeps no message history — a client that's offline
 when something is published never sees it, even after reconnecting.**
-`MqttSyncTransport` works around this by publishing every row *retained*,
-one per row on its own subtopic (`<topic>/<entityType>/<syncId>`), and
-subscribing to the whole tree at once (`<topic>/#`). A retained message is
-the one piece of state an MQTT broker does keep — the last message
-published to an exact topic, replayed immediately to any client that
-(re)subscribes to it, whether or not they were online for the original
-publish. This turns the broker into a small, self-pruning key-value store
-of "current state per row," so pairing a connection for the first time (or
-reconnecting after any amount of downtime) always replays everything, not
-just live traffic from that point on. Row deletion is represented as an
-empty-payload retained publish (`clearRetained`) — MQTT's own way of
-saying "nothing retained here anymore," which the broker both stores (as
-"deleted") and delivers live to anyone currently subscribed. This was a
-real bug in the first version of this transport (plain, non-retained
-publishes) — a device paired while the other was offline would never
-receive anything it missed; see git history on `mqtt_sync_transport.dart`
-if you need the before/after.
+`MqttSyncTransport` works around this at the *within-one-topic* level by
+publishing every row *retained*, one per row on its own subtopic
+(`<topic>/<entityType>/<syncId>`) — a retained message is the one piece of
+state an MQTT broker does keep, replayed immediately to any client that
+(re)subscribes to that topic, whether or not they were online for the
+original publish. Row deletion is an empty-payload retained publish
+(`clearRetained`) — MQTT's own way of saying "nothing retained here
+anymore," delivered live to anyone currently subscribed too, doubling as
+the delete notification. **Because the topic itself now rotates, retained
+replay alone no longer covers a device that's been offline across several
+slot rotations** — it has no way to "look back" at old slot topics it
+never subscribed to. That's what an explicit resync request/response
+(a consuming-app concern — see TaskApp's `SyncService`) is for: a device
+that just reconnected asks whoever's currently listening to republish
+their full current state on the current topic, rather than relying on
+history that may no longer be reachable.
 
-**Consequence worth flagging to end users**: the broker now holds a
-standing copy of the ciphertext for every row ever published on a
-connection, until that row is deleted — not just transient in-flight
-traffic. Still just ciphertext, still gated behind the unguessable topic,
-but a meaningfully different storage footprint than "nothing is ever
-stored." Describe the feature to users as "no account, encrypted data
-briefly-to-indefinitely cached on a public broker," not "no server storage
-at all."
+**Consequence worth flagging to end users**: the broker holds a standing
+copy of the ciphertext for every row published within a given slot's
+topic, until either that row is deleted or the slot ages out and traffic
+moves on — not just transient in-flight traffic. Still just ciphertext,
+still gated behind an unguessable (and now short-lived) topic, but a
+meaningfully different storage footprint than "nothing is ever stored."
+Describe the feature to users as "no account, end-to-end encrypted," not
+"no server storage at all."
 
 `SyncPermission` is a set of bitflags (`sync`, `communicate`, `control`)
 packed into one byte of the key, not a single enum value — a key can carry
 any subset. This package only defines the flags; what each tier actually
-authorizes is entirely up to the consuming app (TaskApp gates real DB
-writes with `sync` and delegates to its existing Automation executor for
-`control` — see TaskApp's own CLAUDE.md/feature map, not this repo).
+authorizes (including whether it requires a valid signature) is entirely
+up to the consuming app (TaskApp gates real DB writes with `sync` and
+delegates to its existing Automation executor for `control`, requiring a
+verified signature from the creator's public key first — see TaskApp's
+own CLAUDE.md/feature map, not this repo).
 
 ## The Drift cross-package pattern (read this before touching `db/`)
 
