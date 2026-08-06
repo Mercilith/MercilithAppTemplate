@@ -42,5 +42,7 @@ export 'sync/sync_envelope.dart';
 export 'sync/sync_id.dart';
 export 'sync/sync_key.dart';
 export 'sync/sync_permission.dart';
+export 'sync/sync_signature.dart';
+export 'sync/signed_message.dart';
 // `sync/base32_crockford.dart` is deliberately NOT exported — internal
 // codec detail of `SyncKey`'s text encoding, not a public API surface.
