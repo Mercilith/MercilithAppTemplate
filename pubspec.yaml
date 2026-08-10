@@ -40,6 +40,14 @@ dependencies:
   mqtt_client: ^10.11.0
   cryptography: ^2.9.0
 
+  # Shared stylization/animation layer: declarative animation chaining +
+  # shimmer (flutter_animate) and Material-team motion primitives for
+  # page/tab transitions and container-transform (animations). Consuming
+  # apps never import these directly — only the wrapper widgets exported
+  # from lib/widgets/ and lib/theming/component_themes.dart. See CLAUDE.md.
+  flutter_animate: ^4.5.2
+  animations: ^2.0.11
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

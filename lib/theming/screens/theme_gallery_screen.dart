@@ -5,6 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../db/theme_kind.dart';
 import '../../db/theme_repository.dart';
+import '../../design/design_tokens.dart';
+import '../../widgets/app_card.dart';
+import '../../widgets/staggered_fade_in.dart';
 import '../providers/theme_providers.dart';
 import '../theme_io.dart';
 import '../theme_schema.dart';
@@ -45,7 +48,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
           }
           return ListView(
             padding: const EdgeInsets.only(bottom: 96),
-            children: [
+            children: staggerFadeIn([
               for (final entry in _ordered(groups)) ...[
                 _SectionHeader(_kindLabel(entry.key)),
                 for (final t in entry.value)
@@ -56,7 +59,7 @@ class ThemeGalleryScreen extends ConsumerWidget {
                     onAction: (a) => _handleAction(context, ref, t, a),
                   ),
               ],
-            ],
+            ]),
           );
         },
       ),
@@ -223,14 +226,25 @@ class _ThemeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = parsed.schema;
     final isCustom = parsed.row.kind == ThemeKind.custom;
-    return ListTile(
+    return AppCard(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       onTap: onApply,
-      leading: _Swatches(schema: s),
-      title: Text(s.name),
-      subtitle: Text(s.brightness == Brightness.dark ? 'Dark' : 'Light'),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
+          _Swatches(schema: s),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.name, style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  s.brightness == Brightness.dark ? 'Dark' : 'Light',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
           if (isActive)
             Icon(Icons.check_circle,
                 color: Theme.of(context).colorScheme.primary),
