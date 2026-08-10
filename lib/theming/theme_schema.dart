@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'component_themes.dart';
+
 /// Current version of the theme JSON format (see docs/theme-schema.md).
 const int kThemeSchemaVersion = 1;
 
@@ -163,11 +165,11 @@ class ThemeSchema {
   }
 
   ThemeData toThemeData() {
-    return ThemeData(
+    return applyComponentThemes(ThemeData(
       colorScheme: toColorScheme(),
       useMaterial3: true,
       brightness: brightness,
-    );
+    ));
   }
 
   Map<String, dynamic> toJson() {
