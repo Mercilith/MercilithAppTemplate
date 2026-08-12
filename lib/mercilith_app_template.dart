@@ -28,6 +28,7 @@ export 'backup/backup_service.dart';
 export 'backup/import_dialog.dart';
 
 // Widgets
+export 'widgets/animated_collapse.dart';
 export 'widgets/animated_count_text.dart';
 export 'widgets/animated_expand_icon.dart';
 export 'widgets/animated_progress_bar.dart';
