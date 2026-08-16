@@ -18,9 +18,11 @@ Future<void> exportThemeFile(ThemeSchema schema, {String? shareSubject}) async {
   await file.writeAsString(
     const JsonEncoder.withIndent('  ').convert(schema.toJson()),
   );
-  await Share.shareXFiles(
-    [XFile(file.path, mimeType: 'application/json')],
-    subject: shareSubject ?? 'Theme: ${schema.name}',
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [XFile(file.path, mimeType: 'application/json')],
+      subject: shareSubject ?? 'Theme: ${schema.name}',
+    ),
   );
 }
 
@@ -41,24 +43,16 @@ class ThemeImportResult {
 
 /// Prompts the user to pick a `.json` theme file and parses it.
 Future<ThemeImportResult> importThemeFile() async {
-  final picked = await FilePicker.platform.pickFiles(
+  final picked = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: ['json'],
-    withData: true,
   );
-  if (picked == null || picked.files.isEmpty) {
+  if (picked.isEmpty) {
     return const ThemeImportResult.cancelled();
   }
-  final file = picked.files.single;
+  final file = picked.single;
   try {
-    final String content;
-    if (file.bytes != null) {
-      content = utf8.decode(file.bytes!);
-    } else if (file.path != null) {
-      content = await File(file.path!).readAsString();
-    } else {
-      return const ThemeImportResult.failure('Could not read the file.');
-    }
+    final content = utf8.decode(await file.readAsBytes());
     final json = jsonDecode(content);
     if (json is! Map<String, dynamic>) {
       return const ThemeImportResult.failure('Not a valid theme file.');
