@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:file_picker/file_picker.dart';
@@ -61,18 +60,14 @@ class BackupService {
   /// (does not write). Returns the parsed doc or throws [FormatException]
   /// (with message `'cancelled'` if the user cancelled the picker).
   Future<Map<String, dynamic>> pickAndParse() async {
-    final picked = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['json'],
-      withData: true,
     );
-    if (picked == null || picked.files.isEmpty) {
+    if (picked.isEmpty) {
       throw const FormatException('cancelled');
     }
-    final f = picked.files.single;
-    final content = f.bytes != null
-        ? utf8.decode(f.bytes!)
-        : await File(f.path!).readAsString();
+    final content = utf8.decode(await picked.single.readAsBytes());
     final json = jsonDecode(content);
     if (json is! Map<String, dynamic>) {
       throw const FormatException('Not a valid backup file.');
