@@ -1,5 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mercilith_app_template/mercilith_app_template.dart';
+import 'package:mercilith_app_template/sync/base32_crockford.dart';
 
 void main() {
   group('SyncKey', () {
@@ -110,6 +113,114 @@ void main() {
           ? '1${encoded.substring(1)}'
           : '0${encoded.substring(1)}';
       expect(() => SyncKey.parse(tampered), throwsFormatException);
+    });
+  });
+
+  group('SyncKey relay support', () {
+    Uint8List relayKeyBytes([int seed = 7]) =>
+        Uint8List.fromList(List.generate(32, (i) => (i + seed) % 256));
+
+    test('a freshly generated key has no relaySecretKey', () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      expect(key.relaySecretKey, isNull);
+    });
+
+    test('withRelaySecretKey attaches the key without touching P2P fields',
+        () async {
+      final base = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      final withRelay = base.withRelaySecretKey(relayKeyBytes());
+
+      expect(withRelay.relaySecretKey, relayKeyBytes());
+      expect(withRelay.topicSeed, base.topicSeed);
+      expect(withRelay.secret, base.secret);
+      expect(withRelay.signingPublicKey, base.signingPublicKey);
+      expect(withRelay.permissions, base.permissions);
+    });
+
+    test('encode/decode round-trips relaySecretKey when present', () async {
+      final base = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      final withRelay = base.withRelaySecretKey(relayKeyBytes());
+
+      final parsed = SyncKey.parse(withRelay.encode());
+      expect(parsed.relaySecretKey, relayKeyBytes());
+      expect(parsed.topicSeed, base.topicSeed);
+      expect(parsed.secret, base.secret);
+    });
+
+    test('encode/decode round-trips a null relaySecretKey', () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      final parsed = SyncKey.parse(key.encode());
+      expect(parsed.relaySecretKey, isNull);
+    });
+
+    test('parse still accepts a legacy v2-format key (no relay byte)',
+        () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      final v3 = key.encode();
+      // Rebuild the raw bytes as v2: same as v3 minus the trailing
+      // presence byte, with the version byte set to 2 instead of 3.
+      final decoded = base32CrockfordDecode(v3);
+      final legacyBytes = Uint8List.fromList([
+        2,
+        ...decoded.sublist(1, decoded.length - 1),
+      ]);
+      final legacyEncoded = base32CrockfordEncode(legacyBytes);
+
+      final parsed = SyncKey.parse(legacyEncoded);
+      expect(parsed.relaySecretKey, isNull);
+      expect(parsed.topicSeed, key.topicSeed);
+      expect(parsed.secret, key.secret);
+      expect(parsed.signingPublicKey, key.signingPublicKey);
+    });
+
+    test('currentRelayChannel throws without a relaySecretKey', () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync})).key;
+      expect(() => key.currentRelayChannel(), throwsStateError);
+    });
+
+    test('relay channel is namespaced and 16 lowercase hex digits',
+        () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync}))
+          .key
+          .withRelaySecretKey(relayKeyBytes());
+      final channel =
+          await key.relayChannelForSlot(SyncKey.relaySlotFor(DateTime.utc(2026, 1, 1)));
+      expect(channel, startsWith('mclhost/v1/users/'));
+      final hex = channel.substring('mclhost/v1/users/'.length);
+      expect(hex.length, 16);
+      expect(RegExp(r'^[0-9a-f]{16}$').hasMatch(hex), isTrue);
+    });
+
+    test('relay channel is stable within a 5-minute slot, differs across it',
+        () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync}))
+          .key
+          .withRelaySecretKey(relayKeyBytes());
+      final slot = SyncKey.relaySlotFor(DateTime.utc(2026, 1, 1));
+      final a = await key.relayChannelForSlot(slot);
+      final b = await key.relayChannelForSlot(slot);
+      final next = await key.relayChannelForSlot(slot + 1);
+      expect(a, b);
+      expect(a, isNot(next));
+    });
+
+    test('relaySlotFor uses 300-second (not millisecond) steps', () {
+      final base = DateTime.utc(2026, 1, 1, 0, 0, 0);
+      final justUnder = base.add(const Duration(seconds: 299));
+      final atBoundary = base.add(const Duration(seconds: 300));
+      expect(SyncKey.relaySlotFor(justUnder), SyncKey.relaySlotFor(base));
+      expect(SyncKey.relaySlotFor(atBoundary), isNot(SyncKey.relaySlotFor(base)));
+    });
+
+    test('relay channel differs from the control-tier topic for the same key',
+        () async {
+      final key = (await SyncKey.generate(permissions: {SyncPermission.sync}))
+          .key
+          .withRelaySecretKey(relayKeyBytes());
+      final controlTopic = await key.currentTopic(at: DateTime.utc(2026, 1, 1));
+      final relayChannel = await key.currentRelayChannel(at: DateTime.utc(2026, 1, 1));
+      expect(controlTopic, isNot(contains('mclhost')));
+      expect(relayChannel, isNot(contains('mercilith/sync')));
     });
   });
 }

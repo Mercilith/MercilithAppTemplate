@@ -104,6 +104,13 @@ class MqttSyncTransport {
 
   MqttServerClient? _client;
   final Set<String> _subscribedTopics = {};
+
+  /// Topics subscribed/published to exactly (no `/#` wildcard, no
+  /// subtopic) — used by the MclHost relay channel, which multiplexes by
+  /// packet type inside the payload rather than by MQTT subtopic. See
+  /// [subscribeExact]/[publishExact].
+  final Set<String> _exactTopics = {};
+
   final StreamController<MqttSyncMessage> _incoming =
       StreamController<MqttSyncMessage>.broadcast();
   StreamSubscription<List<MqttReceivedMessage<MqttMessage>>>? _updatesSub;
@@ -170,19 +177,63 @@ class MqttSyncTransport {
     _client?.unsubscribe('$topic/#');
   }
 
+  /// Subscribes to exactly [topic] (no `/#` wildcard) — for a channel like
+  /// MclHost relay's, where every message on the channel is published to
+  /// the same literal topic and multiplexed by an in-payload packet type
+  /// rather than by subtopic. A no-op if already subscribed.
+  Future<void> subscribeExact(String topic) async {
+    if (!_exactTopics.add(topic)) return;
+    _client?.subscribe(topic, MqttQos.atLeastOnce);
+  }
+
+  /// Unsubscribes from exactly [topic] — a no-op if not currently
+  /// subscribed.
+  Future<void> unsubscribeExact(String topic) async {
+    if (!_exactTopics.remove(topic)) return;
+    _client?.unsubscribe(topic);
+  }
+
+  /// Publishes [bytes] to exactly [topic] (not `<topic>/<subtopic>`),
+  /// counterpart to [subscribeExact]. Not retained by default — the relay
+  /// path relies on `relay_plugin`'s own store-and-forward for
+  /// durability/catch-up, not the broker's retained-message feature (see
+  /// `SyncService`'s relay integration).
+  Future<void> publishExact(
+    String topic,
+    Uint8List bytes, {
+    bool retain = false,
+  }) async {
+    final client = _client;
+    if (client == null || !isConnected) {
+      throw StateError('Not connected.');
+    }
+    final builder = MqttClientPayloadBuilder()
+      ..addBuffer(typed.Uint8Buffer()..addAll(bytes));
+    client.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!, retain: retain);
+  }
+
   void _onData(List<MqttReceivedMessage<MqttMessage>> events) {
     for (final event in events) {
+      final publish = event.payload as MqttPublishMessage;
+      final bytes = Uint8List.fromList(publish.payload.message);
+
+      if (_exactTopics.contains(event.topic)) {
+        _incoming.add(
+          MqttSyncMessage(topic: event.topic, subtopic: '', bytes: bytes),
+        );
+        continue;
+      }
+
       final topic = _subscribedTopics.firstWhere(
         (t) => event.topic.startsWith('$t/'),
         orElse: () => '',
       );
       if (topic.isEmpty) continue;
-      final publish = event.payload as MqttPublishMessage;
       _incoming.add(
         MqttSyncMessage(
           topic: topic,
           subtopic: event.topic.substring(topic.length + 1),
-          bytes: Uint8List.fromList(publish.payload.message),
+          bytes: bytes,
         ),
       );
     }
@@ -240,6 +291,7 @@ class MqttSyncTransport {
     _client?.disconnect();
     _client = null;
     _subscribedTopics.clear();
+    _exactTopics.clear();
   }
 
   /// Disconnects and closes the message stream. Call when this transport

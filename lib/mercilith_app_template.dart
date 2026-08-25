@@ -56,6 +56,8 @@ export 'notifications/notification_service.dart';
 
 // Sync (cross-device, via HiveMQ or any MQTT broker)
 export 'sync/mqtt_sync_transport.dart';
+export 'sync/relay_pairing_code.dart';
+export 'sync/relay_protocol.dart';
 export 'sync/sync_crypto.dart';
 export 'sync/sync_envelope.dart';
 export 'sync/sync_id.dart';
